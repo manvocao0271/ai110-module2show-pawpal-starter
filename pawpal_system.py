@@ -1,117 +1,170 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
-# Task — atomic unit of pet care work
+# Task — a singular pet care activity
 # ---------------------------------------------------------------------------
+
+VALID_CATEGORIES = {"feeding", "walking", "medication", "appointment", "grooming", "training", "enrichment", "other"}
+VALID_FREQUENCIES = {"once", "daily", "weekly", "monthly"}
 
 @dataclass
 class Task:
     task_id: int
     title: str
-    category: str          # e.g. "feeding", "walking", "medication", "appointment"
+    category: str           # one of VALID_CATEGORIES
     due_datetime: datetime
-    priority: int          # 1 (low) – 5 (critical)
+    duration: int           # estimated minutes to complete
+    priority: int           # 1 (low) – 5 (critical)
+    frequency: str = "once" # one of VALID_FREQUENCIES
     description: str = ""
     notes: str = ""
     is_completed: bool = False
-    schedule_id: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        """Validate category, frequency, priority, and duration on construction."""
+        if self.category not in VALID_CATEGORIES:
+            raise ValueError(f"category must be one of {VALID_CATEGORIES}")
+        if self.frequency not in VALID_FREQUENCIES:
+            raise ValueError(f"frequency must be one of {VALID_FREQUENCIES}")
+        if not (1 <= self.priority <= 5):
+            raise ValueError("priority must be between 1 and 5")
+        if self.duration <= 0:
+            raise ValueError("duration must be a positive number of minutes")
+
+    # -- state changes -------------------------------------------------------
 
     def complete(self) -> None:
-        """Mark this task as done."""
+        """Mark the task as done."""
         self.is_completed = True
 
-    def prioritize(self, new_priority: int) -> None:
-        """Update the priority level (1–5)."""
+    def reset(self) -> None:
+        """Un-complete a recurring task and advance its due date by one cycle."""
+        if self.frequency == "once":
+            raise ValueError("Cannot reset a one-time task")
+        self.is_completed = False
+        if self.frequency == "daily":
+            self.due_datetime += timedelta(days=1)
+        elif self.frequency == "weekly":
+            self.due_datetime += timedelta(weeks=1)
+        elif self.frequency == "monthly":
+            # Advance by ~30 days; production code would use dateutil.relativedelta
+            self.due_datetime += timedelta(days=30)
+
+    def snooze(self, minutes: int) -> None:
+        """Push the due time forward by the given number of minutes."""
+        if minutes <= 0:
+            raise ValueError("snooze minutes must be positive")
+        self.due_datetime += timedelta(minutes=minutes)
+
+    def update_priority(self, new_priority: int) -> None:
+        """Change the priority (1–5)."""
+        if not (1 <= new_priority <= 5):
+            raise ValueError("priority must be between 1 and 5")
         self.priority = new_priority
 
-    def is_overdue(self) -> bool:
-        """Return True if the task is past its due time and not yet completed."""
-        return not self.is_completed and datetime.now() > self.due_datetime
+    # -- queries -------------------------------------------------------------
+
+    def is_overdue(self, now: Optional[datetime] = None) -> bool:
+        """True if past due and not yet completed. Accepts an explicit 'now' for testability."""
+        now = now or datetime.now()
+        return not self.is_completed and now > self.due_datetime
+
+    def is_due_today(self, reference: Optional[datetime] = None) -> bool:
+        """True if the task falls on the same calendar day as reference (default: today)."""
+        reference = reference or datetime.now()
+        return self.due_datetime.date() == reference.date()
+
+    def __repr__(self) -> str:
+        """Return a compact string showing id, priority, title, category, duration, and status."""
+        status = "done" if self.is_completed else ("OVERDUE" if self.is_overdue() else "pending")
+        return (
+            f"Task({self.task_id} | [{self.priority}] {self.title} "
+            f"| {self.category} | {self.duration}min | {status})"
+        )
 
 
 # ---------------------------------------------------------------------------
-# Pet — a single animal owned by a User
+# Pet — stores pet details and owns a list of tasks directly
 # ---------------------------------------------------------------------------
 
 @dataclass
 class Pet:
     pet_id: int
     name: str
-    species: str           # e.g. "dog", "cat", "rabbit"
+    species: str            # e.g. "dog", "cat", "rabbit"
     breed: str
-    age: int               # years
-    weight: float          # kg
+    age: int                # years
+    weight: float           # kg
+    owner_id: Optional[int] = None
     medical_notes: str = ""
-    schedules: List[Schedule] = field(default_factory=list)
+    tasks: List[Task] = field(default_factory=list)
 
-    def add_schedule(self, schedule: Schedule) -> None:
-        """Attach a schedule to this pet."""
-        self.schedules.append(schedule)
-
-    def get_upcoming_tasks(self) -> List[Task]:
-        """Return all incomplete tasks across every schedule, sorted by due time."""
-        tasks = [
-            task
-            for schedule in self.schedules
-            for task in schedule.tasks
-            if not task.is_completed
-        ]
-        return sorted(tasks, key=lambda t: t.due_datetime)
-
-    def update_profile(self, **kwargs) -> None:
-        """Update any profile field by keyword (e.g. update_profile(weight=12.5))."""
-        for key, value in kwargs.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-
-
-# ---------------------------------------------------------------------------
-# Schedule — a named collection of tasks for one pet
-# ---------------------------------------------------------------------------
-
-class Schedule:
-    def __init__(
-        self,
-        schedule_id: int,
-        title: str,
-        pet: Pet,
-        start_date: datetime,
-        end_date: datetime,
-        recurrence: str = "none",   # "none" | "daily" | "weekly" | "monthly"
-    ) -> None:
-        self.schedule_id = schedule_id
-        self.title = title
-        self.pet = pet              # direct back-reference to the owning Pet
-        self.pet_id = pet.pet_id   # kept for convenience / serialization
-        self.start_date = start_date
-        self.end_date = end_date
-        self.recurrence = recurrence
-        self.tasks: List[Task] = []
+    # -- task management -----------------------------------------------------
 
     def add_task(self, task: Task) -> None:
-        """Add a task and stamp it with this schedule's id."""
-        task.schedule_id = self.schedule_id
+        """Add a task to this pet. Raises if the task_id is already present."""
+        if any(t.task_id == task.task_id for t in self.tasks):
+            raise ValueError(f"Task {task.task_id} already exists for pet '{self.name}'")
         self.tasks.append(task)
 
     def remove_task(self, task_id: int) -> None:
-        """Remove a task by id."""
+        """Remove a task by id. Raises if not found."""
+        before = len(self.tasks)
         self.tasks = [t for t in self.tasks if t.task_id != task_id]
+        if len(self.tasks) == before:
+            raise ValueError(f"Task {task_id} not found for pet '{self.name}'")
 
-    def get_tasks_by_priority(self) -> List[Task]:
-        """Return tasks sorted highest priority first, then soonest due."""
-        return sorted(self.tasks, key=lambda t: (-t.priority, t.due_datetime))
+    def get_task(self, task_id: int) -> Task:
+        """Fetch a single task by id."""
+        for t in self.tasks:
+            if t.task_id == task_id:
+                return t
+        raise ValueError(f"Task {task_id} not found for pet '{self.name}'")
 
-    def get_overdue_tasks(self) -> List[Task]:
-        """Return all overdue tasks in this schedule."""
-        return [t for t in self.tasks if t.is_overdue()]
+    # -- filtered views ------------------------------------------------------
+
+    def get_pending_tasks(self) -> List[Task]:
+        """All incomplete tasks, sorted by due time."""
+        return sorted(
+            [t for t in self.tasks if not t.is_completed],
+            key=lambda t: t.due_datetime,
+        )
+
+    def get_overdue_tasks(self, now: Optional[datetime] = None) -> List[Task]:
+        """All tasks that are past due and not completed."""
+        return [t for t in self.tasks if t.is_overdue(now)]
+
+    def get_tasks_by_category(self, category: str) -> List[Task]:
+        """Return all tasks matching a category."""
+        return [t for t in self.tasks if t.category == category]
+
+    def get_tasks_due_today(self, reference: Optional[datetime] = None) -> List[Task]:
+        """Return incomplete tasks due on the reference date (default: today)."""
+        return [t for t in self.tasks if not t.is_completed and t.is_due_today(reference)]
+
+    # -- profile update ------------------------------------------------------
+
+    def update_profile(self, **kwargs) -> None:
+        """Update profile fields by keyword. Raises on unknown keys."""
+        protected = {"pet_id", "tasks"}
+        for key, value in kwargs.items():
+            if key in protected:
+                raise ValueError(f"'{key}' cannot be updated via update_profile")
+            if not hasattr(self, key):
+                raise ValueError(f"Unknown field '{key}' on Pet")
+            setattr(self, key, value)
+
+    def __repr__(self) -> str:
+        """Return a compact string showing id, name, species, and task count."""
+        return f"Pet({self.pet_id} | {self.name} | {self.species} | {len(self.tasks)} tasks)"
 
 
 # ---------------------------------------------------------------------------
-# User — the pet owner
+# User — manages multiple pets and provides unified access to all their tasks
 # ---------------------------------------------------------------------------
 
 class User:
@@ -122,33 +175,202 @@ class User:
         email: str,
         phone: str = "",
     ) -> None:
+        """Initialise a user account with contact details and an empty pet roster."""
         self.user_id = user_id
         self.name = name
         self.email = email
         self.phone = phone
         self.pets: List[Pet] = []
 
-    def register(self) -> None:
-        """Placeholder for account creation logic."""
-        pass
-
-    def login(self) -> None:
-        """Placeholder for authentication logic."""
-        pass
+    # -- pet management ------------------------------------------------------
 
     def add_pet(self, pet: Pet) -> None:
-        """Add a pet to this user's profile."""
+        """Register a pet under this user. Stamps the pet with owner_id."""
+        if any(p.pet_id == pet.pet_id for p in self.pets):
+            raise ValueError(f"Pet {pet.pet_id} is already registered")
+        pet.owner_id = self.user_id
         self.pets.append(pet)
 
     def remove_pet(self, pet_id: int) -> None:
         """Remove a pet by id."""
+        before = len(self.pets)
         self.pets = [p for p in self.pets if p.pet_id != pet_id]
+        if len(self.pets) == before:
+            raise ValueError(f"Pet {pet_id} not found")
 
-    def view_schedule(self) -> List[Task]:
-        """Return all upcoming tasks across every owned pet, sorted by due time."""
-        tasks = [
-            task
-            for pet in self.pets
-            for task in pet.get_upcoming_tasks()
+    def get_pet(self, pet_id: int) -> Pet:
+        """Fetch a single pet by id."""
+        for p in self.pets:
+            if p.pet_id == pet_id:
+                return p
+        raise ValueError(f"Pet {pet_id} not found")
+
+    # -- cross-pet task access -----------------------------------------------
+
+    def get_all_tasks(self) -> List[Task]:
+        """Every task across all pets, sorted by due time."""
+        all_tasks = [task for pet in self.pets for task in pet.tasks]
+        return sorted(all_tasks, key=lambda t: t.due_datetime)
+
+    def get_all_pending_tasks(self) -> List[Task]:
+        """All incomplete tasks across all pets, sorted by due time."""
+        return [t for t in self.get_all_tasks() if not t.is_completed]
+
+    def get_all_overdue_tasks(self, now: Optional[datetime] = None) -> List[Task]:
+        """All overdue tasks across all pets."""
+        return [t for t in self.get_all_tasks() if t.is_overdue(now)]
+
+    # -- convenience ---------------------------------------------------------
+
+    def task_count(self) -> Dict[str, int]:
+        """Summary counts: total, pending, overdue, completed."""
+        all_tasks = self.get_all_tasks()
+        return {
+            "total": len(all_tasks),
+            "pending": sum(1 for t in all_tasks if not t.is_completed),
+            "overdue": sum(1 for t in all_tasks if t.is_overdue()),
+            "completed": sum(1 for t in all_tasks if t.is_completed),
+        }
+
+    def __repr__(self) -> str:
+        """Return a compact string showing id, name, and pet count."""
+        return f"User({self.user_id} | {self.name} | {len(self.pets)} pets)"
+
+
+# ---------------------------------------------------------------------------
+# Schedule — the "brain": retrieves, organizes, and plans tasks across pets
+# ---------------------------------------------------------------------------
+
+class Schedule:
+    """
+    Coordinates task planning for a User's entire roster of pets.
+    Core algorithm: generate_daily_plan() uses a greedy priority-first
+    approach to fit tasks into an available time window.
+    """
+
+    def __init__(self, user: User) -> None:
+        """Bind the Schedule brain to a User and their full pet roster."""
+        self.user = user
+
+    # -- retrieval -----------------------------------------------------------
+
+    def get_all_tasks(self, include_completed: bool = False) -> List[Task]:
+        """All tasks across every pet, sorted by due time."""
+        tasks = self.user.get_all_tasks()
+        if not include_completed:
+            tasks = [t for t in tasks if not t.is_completed]
+        return tasks
+
+    def get_tasks_by_priority(self, include_completed: bool = False) -> List[Task]:
+        """Tasks sorted highest priority first, then soonest due."""
+        tasks = self.get_all_tasks(include_completed)
+        return sorted(tasks, key=lambda t: (-t.priority, t.due_datetime))
+
+    def get_tasks_by_category(self, category: str) -> List[Task]:
+        """All pending tasks matching a specific category."""
+        return [t for t in self.get_all_tasks() if t.category == category]
+
+    def get_tasks_for_pet(self, pet_id: int) -> List[Task]:
+        """All pending tasks belonging to a specific pet."""
+        pet = self.user.get_pet(pet_id)
+        return pet.get_pending_tasks()
+
+    def get_overdue_tasks(self, now: Optional[datetime] = None) -> List[Task]:
+        """All overdue tasks across every pet."""
+        return self.user.get_all_overdue_tasks(now)
+
+    def get_upcoming_tasks(self, hours: int = 24, now: Optional[datetime] = None) -> List[Task]:
+        """Pending tasks due within the next N hours."""
+        now = now or datetime.now()
+        cutoff = now + timedelta(hours=hours)
+        return [
+            t for t in self.get_all_tasks()
+            if now <= t.due_datetime <= cutoff
         ]
-        return sorted(tasks, key=lambda t: t.due_datetime)
+
+    # -- mutation helpers ----------------------------------------------------
+
+    def complete_task(self, pet_id: int, task_id: int) -> None:
+        """Mark a task done. Automatically resets it if it recurs."""
+        pet = self.user.get_pet(pet_id)
+        task = pet.get_task(task_id)
+        task.complete()
+        if task.frequency != "once":
+            task.reset()
+
+    def add_task_to_pet(self, pet_id: int, task: Task) -> None:
+        """Convenience: add a task directly through the Schedule."""
+        self.user.get_pet(pet_id).add_task(task)
+
+    # -- core scheduling algorithm -------------------------------------------
+
+    def generate_daily_plan(
+        self,
+        available_minutes: int,
+        reference: Optional[datetime] = None,
+    ) -> List[Task]:
+        """Return a priority-first greedy task list that fits within available_minutes; critical tasks always included."""
+        reference = reference or datetime.now()
+
+        # Pool: due today + overdue (deduplicated by task_id)
+        today_tasks = {
+            t.task_id: t
+            for t in self.get_all_tasks()
+            if t.is_due_today(reference) or t.is_overdue(reference)
+        }
+        candidates = sorted(
+            today_tasks.values(),
+            key=lambda t: (-t.priority, t.due_datetime),
+        )
+
+        plan: List[Task] = []
+        time_used = 0
+
+        # Pass 1 — always include critical tasks (priority 5)
+        non_critical: List[Task] = []
+        for task in candidates:
+            if task.priority == 5:
+                plan.append(task)
+                time_used += task.duration
+            else:
+                non_critical.append(task)
+
+        # Pass 2 — greedily fill remaining budget
+        for task in non_critical:
+            if time_used + task.duration <= available_minutes:
+                plan.append(task)
+                time_used += task.duration
+
+        # Re-sort final plan: overdue first, then by priority, then by due time
+        plan.sort(key=lambda t: (not t.is_overdue(reference), -t.priority, t.due_datetime))
+        return plan
+
+    # -- summary -------------------------------------------------------------
+
+    def daily_summary(
+        self,
+        available_minutes: int = 120,
+        reference: Optional[datetime] = None,
+    ) -> Dict:
+        """Return a structured summary dict containing the daily plan, counts, and metadata for the UI."""
+        reference = reference or datetime.now()
+        plan = self.generate_daily_plan(available_minutes, reference)
+        overdue = self.get_overdue_tasks(reference)
+        upcoming = self.get_upcoming_tasks(hours=24, now=reference)
+        counts = self.user.task_count()
+
+        return {
+            "date": reference.strftime("%A, %B %d %Y"),
+            "owner": self.user.name,
+            "pets": [p.name for p in self.user.pets],
+            "available_minutes": available_minutes,
+            "planned_minutes": sum(t.duration for t in plan),
+            "daily_plan": plan,
+            "overdue_count": len(overdue),
+            "upcoming_count": len(upcoming),
+            "task_counts": counts,
+        }
+
+    def __repr__(self) -> str:
+        """Return a compact string showing the owner name and pet count."""
+        return f"Schedule(owner={self.user.name} | {len(self.user.pets)} pets)"
