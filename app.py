@@ -163,22 +163,71 @@ else:
             st.session_state.next_task_id += 1
             st.success(f"Task '{new_task.title}' added to {target_pet.name}'s schedule!")
 
-    # -- task list per pet ---------------------------------------------------
-    for pet in user.pets:
-        pending = pet.get_pending_tasks()                # <-- Pet.get_pending_tasks()
-        if pending:
-            st.markdown(f"**{pet.name}'s pending tasks**")
-            rows = []
-            for t in pending:
-                rows.append({
-                    "Title":    t.title,
-                    "Category": t.category,
-                    "Due":      t.due_datetime.strftime("%b %d  %I:%M %p"),
-                    "Duration": f"{t.duration} min",
-                    "Priority": t.priority,
-                    "Overdue":  "Yes" if t.is_overdue() else "No",
-                })
-            st.table(rows)
+    # -- task list: unified view via Schedule --------------------------------
+    if st.session_state.schedule is None:
+        st.session_state.schedule = Schedule(user)
+    sched: Schedule = st.session_state.schedule
+    sort_mode = st.radio(
+        "Sort tasks by", ["Due time", "Priority"], horizontal=True, key="sort_mode"
+    )
+    if sort_mode == "Due time":
+        visible_tasks = sched.sort_by_time()            # Schedule.sort_by_time()
+    else:
+        visible_tasks = sched.get_tasks_by_priority()   # Schedule.get_tasks_by_priority()
+
+    # map task_id → pet_id so complete_task() knows which pet owns each task
+    task_pet_map = {t.task_id: pet.pet_id for pet in user.pets for t in pet.tasks}
+
+    PRIORITY_LABELS = {
+        1: "1 — Low", 2: "2 — Low+", 3: "3 — Medium",
+        4: "4 — High", 5: "5 — Critical",
+    }
+
+    if not visible_tasks:
+        st.info("No pending tasks scheduled.")
+    else:
+        overdue_count = sum(1 for t in visible_tasks if t.is_overdue())
+        col_a, col_b = st.columns(2)
+        col_a.metric("Pending Tasks", len(visible_tasks))
+        col_b.metric("Overdue", overdue_count)
+        if overdue_count:
+            st.warning(f"{overdue_count} task(s) are past due and need immediate attention.")
+
+        rows = []
+        for task in visible_tasks:
+            pet_name = next(
+                (p.name for p in user.pets if p.pet_id == task_pet_map.get(task.task_id)), "?"
+            )
+            rows.append({
+                "Status":   "🔴 Overdue" if task.is_overdue() else "🟢 Pending",
+                "Pet":      pet_name,
+                "Task":     task.title,
+                "Category": task.category.title(),
+                "Due":      task.due_datetime.strftime("%b %d  %I:%M %p"),
+                "Duration": f"{task.duration} min",
+                "Priority": PRIORITY_LABELS[task.priority],
+                "Repeats":  task.frequency.title(),
+            })
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        st.markdown("##### Complete a task")
+        task_labels = {
+            f"[{task.priority}] {task.title} "
+            f"({next((p.name for p in user.pets if p.pet_id == task_pet_map.get(task.task_id)), '?')})": task
+            for task in visible_tasks
+        }
+        selected_label = st.selectbox(
+            "Select task to complete", list(task_labels.keys()), label_visibility="collapsed"
+        )
+        if st.button("Mark Complete ✓"):
+            chosen = task_labels[selected_label]
+            sched.complete_task(                    # Schedule.complete_task()
+                pet_id=task_pet_map[chosen.task_id],
+                task_id=chosen.task_id,
+            )
+            follow_up = " Next occurrence scheduled." if chosen.frequency in ("daily", "weekly") else ""
+            st.success(f"'{chosen.title}' marked complete!{follow_up}")
+            st.rerun()
 
 st.divider()
 
@@ -209,6 +258,26 @@ else:
         if not plan:
             st.info("No tasks due today.")
         else:
+            plan_rows = [
+                {
+                    "Status":   "🔴 Overdue" if t.is_overdue() else "🟢 Today",
+                    "Time":     t.due_datetime.strftime("%I:%M %p"),
+                    "Task":     t.title,
+                    "Category": t.category.title(),
+                    "Duration": f"{t.duration} min",
+                    "Priority": t.priority,
+                }
+                for t in plan
+            ]
+            st.dataframe(
+                plan_rows,
+                column_config={
+                    "Priority": st.column_config.NumberColumn("Priority", format="%d ⭐"),
+                },
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption("Expand a task for full details:")
             for i, task in enumerate(plan, 1):
                 overdue_badge = " 🔴 OVERDUE" if task.is_overdue() else ""
                 with st.expander(
@@ -221,3 +290,29 @@ else:
                     col3.metric("Priority", task.priority)
                     if task.description:
                         st.caption(task.description)
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# Section 5 — Conflict detection
+# ---------------------------------------------------------------------------
+st.subheader("5. Conflict Detection")
+
+if user is None or not user.pets:
+    st.warning("Add an owner, pets, and tasks first.")
+else:
+    if st.session_state.schedule is None:
+        st.session_state.schedule = Schedule(user)
+    sched5: Schedule = st.session_state.schedule
+    conflicts = sched5.detect_conflicts()           # Schedule.detect_conflicts()
+
+    col_c, col_d = st.columns(2)
+    col_c.metric("Total Tasks", sum(len(p.tasks) for p in user.pets))
+    col_d.metric("Conflicts Found", len(conflicts))
+
+    if conflicts:
+        st.error(f"{len(conflicts)} scheduling conflict(s) detected — tasks below overlap in time:")
+        for w in conflicts:
+            st.warning(w)
+    else:
+        st.success("No scheduling conflicts — you're all clear!")

@@ -22,6 +22,36 @@ Your final app should:
 - Display the plan clearly (and ideally explain the reasoning)
 - Include tests for the most important scheduling behaviors
 
+## 📸 Demo
+
+<a href="demo.png" target="_blank"><img src="demo.png" alt="PawPal+ Streamlit app screenshot" width="800"></a>
+
+---
+
+## Features
+
+### Owner & pet management
+Register an owner with name, email, and phone. Add unlimited pets with species, breed, age, weight, and medical notes. All data persists in Streamlit session state for the lifetime of the browser session.
+
+### Task scheduling
+Assign care tasks to any pet with a title, category (feeding, walking, medication, appointment, grooming, training, enrichment, or other), due date and time, estimated duration, priority level (1 Low → 5 Critical), and recurrence frequency (once, daily, weekly, monthly).
+
+### Priority-first daily plan — `Schedule.generate_daily_plan()`
+A two-pass greedy algorithm fits tasks into a user-defined time budget. Pass 1 always includes every priority-5 (Critical) task regardless of available time. Pass 2 iterates the remaining candidates in priority-then-due-time order and greedily fills the remaining budget. The final plan is re-sorted so overdue tasks surface first, then by descending priority, then by due time.
+
+### Automatic recurrence — `Schedule.complete_task()`
+Marking a `daily` or `weekly` task complete keeps the original as a historical record and immediately creates a fresh pending instance for the next cycle (`due + 1 day` or `due + 7 days`). One-time and monthly tasks are simply marked done with no new instance created.
+
+### Conflict detection — `Schedule.detect_conflicts()`
+Detects every pair of pending tasks whose execution windows overlap using interval arithmetic: two tasks conflict when `[start_a, start_a + duration_a)` intersects `[start_b, start_b + duration_b)`. Tasks are sorted by start time first so the inner loop can break as soon as a candidate starts at or after the current task ends — conflict-free schedules pay only the O(n log n) sort cost.
+
+### Flexible sorting & filtering
+- `Schedule.sort_by_time()` — orders all tasks by `HH:MM` due time; accepts an `include_completed` flag.
+- `Schedule.get_tasks_by_priority()` — sorts by descending priority, then soonest due as a tiebreaker.
+- `Schedule.filter_tasks(completed, pet_name)` — narrows results by completion status, pet name (case-insensitive), or both; all combinations return results sorted by due time.
+
+---
+
 ## Getting started
 
 ### Setup
@@ -111,17 +141,20 @@ The core scheduling logic is well-covered — sorting, recurrence, and conflict 
 
 ```mermaid
 classDiagram
+    direction LR
     class User {
         +int user_id
         +str name
         +str email
         +str phone
         +List~Pet~ pets
-        +register()
-        +login()
         +add_pet(pet: Pet)
         +remove_pet(pet_id: int)
-        +view_schedule()
+        +get_pet(pet_id: int) Pet
+        +get_all_tasks() List~Task~
+        +get_all_pending_tasks() List~Task~
+        +get_all_overdue_tasks(now) List~Task~
+        +task_count() Dict
     }
 
     class Pet {
@@ -131,45 +164,57 @@ classDiagram
         +str breed
         +int age
         +float weight
+        +int owner_id
         +str medical_notes
-        +List~Schedule~ schedules
-        +add_schedule(schedule: Schedule)
-        +get_upcoming_tasks()
-        +update_profile()
+        +List~Task~ tasks
+        +add_task(task: Task)
+        +remove_task(task_id: int)
+        +get_task(task_id: int) Task
+        +get_pending_tasks() List~Task~
+        +get_overdue_tasks(now) List~Task~
+        +get_tasks_by_category(category) List~Task~
+        +get_tasks_due_today(reference) List~Task~
+        +update_profile(**kwargs)
     }
 
     class Schedule {
-        +int schedule_id
-        +str title
-        +datetime start_date
-        +datetime end_date
-        +str recurrence
-        +List~Task~ tasks
-        +Pet pet
-        +int pet_id
-        +add_task(task: Task)
-        +remove_task(task_id: int)
-        +get_tasks_by_priority()
+        +User user
+        +get_all_tasks(include_completed) List~Task~
+        +get_tasks_by_priority(include_completed) List~Task~
+        +sort_by_time(include_completed) List~Task~
+        +filter_tasks(completed, pet_name) List~Task~
+        +get_tasks_by_category(category) List~Task~
+        +get_tasks_for_pet(pet_id) List~Task~
+        +get_overdue_tasks(now) List~Task~
+        +get_upcoming_tasks(hours, now) List~Task~
+        +complete_task(pet_id, task_id)
+        +add_task_to_pet(pet_id, task)
+        +detect_conflicts() List~str~
+        +generate_daily_plan(available_minutes, reference) List~Task~
+        +daily_summary(available_minutes, reference) Dict
     }
 
     class Task {
         +int task_id
         +str title
         +str category
-        +str description
         +datetime due_datetime
+        +int duration
         +int priority
-        +bool is_completed
+        +str frequency
+        +str description
         +str notes
-        +int schedule_id
+        +bool is_completed
         +complete()
-        +prioritize()
-        +is_overdue()
+        +reset()
+        +snooze(minutes: int)
+        +update_priority(new_priority: int)
+        +is_overdue(now) bool
+        +is_due_today(reference) bool
     }
 
     User "1" --> "0..*" Pet : owns
-    Pet "1" --> "0..*" Schedule : has
-    Schedule "0..*" --> "1" Pet : belongs to
-    Schedule "1" --> "1..*" Task : contains
+    Pet "1" --> "0..*" Task : has
+    Schedule "1" --> "1" User : coordinates
 
 ```
