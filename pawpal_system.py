@@ -266,6 +266,37 @@ class Schedule:
         tasks = self.get_all_tasks(include_completed)
         return sorted(tasks, key=lambda t: (-t.priority, t.due_datetime))
 
+    def sort_by_time(self, include_completed: bool = False) -> List[Task]:
+        """All tasks sorted by their due time as 'HH:MM' strings."""
+        tasks = self.get_all_tasks(include_completed)
+        return sorted(tasks, key=lambda t: t.due_datetime.strftime("%H:%M"))
+
+    def filter_tasks(
+        self,
+        completed: Optional[bool] = None,
+        pet_name: Optional[str] = None,
+    ) -> List[Task]:
+        """Return tasks filtered by completion status and/or pet name.
+
+        Args:
+            completed: If True, return only completed tasks. If False, return
+                       only incomplete tasks. If None, completion is not filtered.
+            pet_name:  If given, return only tasks belonging to that pet
+                       (case-insensitive). If None, all pets are included.
+
+        Returns:
+            Matching tasks sorted by due time.
+        """
+        results = []
+        for pet in self.user.pets:
+            if pet_name is not None and pet.name.lower() != pet_name.lower():
+                continue
+            for task in pet.tasks:
+                if completed is not None and task.is_completed != completed:
+                    continue
+                results.append(task)
+        return sorted(results, key=lambda t: t.due_datetime)
+
     def get_tasks_by_category(self, category: str) -> List[Task]:
         """All pending tasks matching a specific category."""
         return [t for t in self.get_all_tasks() if t.category == category]
@@ -290,17 +321,97 @@ class Schedule:
 
     # -- mutation helpers ----------------------------------------------------
 
+    def _next_task_id(self) -> int:
+        """Return an id one above the current maximum across all pets."""
+        all_ids = [t.task_id for pet in self.user.pets for t in pet.tasks]
+        return max(all_ids, default=0) + 1
+
     def complete_task(self, pet_id: int, task_id: int) -> None:
-        """Mark a task done. Automatically resets it if it recurs."""
+        """Mark a task done and, for daily/weekly tasks, add a new instance
+        for the next occurrence using timedelta.  The completed task is kept
+        as a historical record; the new instance starts fresh (pending).
+
+        Frequency behaviour:
+          - daily:   next due = original due + 1 day
+          - weekly:  next due = original due + 7 days
+          - monthly / once: task is marked complete only (no new instance)
+        """
         pet = self.user.get_pet(pet_id)
         task = pet.get_task(task_id)
         task.complete()
-        if task.frequency != "once":
-            task.reset()
+
+        if task.frequency == "daily":
+            next_due = task.due_datetime + timedelta(days=1)
+        elif task.frequency == "weekly":
+            next_due = task.due_datetime + timedelta(weeks=1)
+        else:
+            return  # "once" and "monthly" — no new instance created
+
+        next_task = Task(
+            task_id=self._next_task_id(),
+            title=task.title,
+            category=task.category,
+            due_datetime=next_due,
+            duration=task.duration,
+            priority=task.priority,
+            frequency=task.frequency,
+            description=task.description,
+            notes=task.notes,
+        )
+        pet.add_task(next_task)
 
     def add_task_to_pet(self, pet_id: int, task: Task) -> None:
         """Convenience: add a task directly through the Schedule."""
         self.user.get_pet(pet_id).add_task(task)
+
+    # -- conflict detection --------------------------------------------------
+
+    def detect_conflicts(self) -> List[str]:
+        """Return a list of human-readable warning strings for every pair of
+        pending tasks whose time windows overlap.
+
+        Two tasks conflict when their execution intervals intersect:
+            [due_a, due_a + duration_a)  overlaps  [due_b, due_b + duration_b)
+
+        Works across different pets as well as within the same pet.
+        Returns an empty list when no conflicts are found.
+
+        Performance: entries are sorted by start time so the inner loop can
+        break as soon as task_b starts at or after task_a ends — no later
+        task can overlap task_a either.  Conflict-free schedules cost only
+        the sort (O(n log n)); the comparison loop exits immediately each time.
+        """
+        # Pre-compute (task, pet_name, start, end) and sort by start time
+        entries: List[tuple] = sorted(
+            [
+                (task, pet.name,
+                 task.due_datetime,
+                 task.due_datetime + timedelta(minutes=task.duration))
+                for pet in self.user.pets
+                for task in pet.tasks
+                if not task.is_completed
+            ],
+            key=lambda e: e[2],  # sort by start datetime
+        )
+
+        warnings: List[str] = []
+
+        for i, (task_a, pet_a, start_a, end_a) in enumerate(entries):
+            for task_b, pet_b, start_b, end_b in entries[i + 1:]:
+                # Early termination: sorted order guarantees no later task overlaps
+                if start_b >= end_a:
+                    break
+
+                warnings.append(
+                    f"CONFLICT: '{task_a.title}' ({pet_a}, "
+                    f"{start_a.strftime('%I:%M %p')}–"
+                    f"{end_a.strftime('%I:%M %p')}) overlaps with "
+                    f"'{task_b.title}' ({pet_b}, "
+                    f"{start_b.strftime('%I:%M %p')}–"
+                    f"{end_b.strftime('%I:%M %p')})"
+                )
+
+        return warnings
 
     # -- core scheduling algorithm -------------------------------------------
 
