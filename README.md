@@ -87,6 +87,28 @@ The algorithm sorts tasks by start time first so the inner comparison loop can b
 
 ---
 
+## Testing PawPal+
+
+Run the full test suite from the project root:
+
+```bash
+python -m pytest
+```
+
+28 tests across 19 test cases verify the three most critical scheduling behaviors:
+
+| Area | What is tested |
+|------|---------------|
+| **Sorting** | `sort_by_time()` returns tasks in ascending chronological order regardless of insertion order; `filter_tasks()` results are sorted by full `due_datetime` |
+| **Recurring tasks** | Completing a `daily` task creates a new pending instance due exactly 24 hours later; completing a `weekly` task advances by 7 days; completing a `once` task creates no new instance |
+| **Conflict detection** | Overlapping task windows are flagged for same-pet exact overlap, same-pet partial overlap, and cross-pet overlap; adjacent (non-overlapping) tasks are never reported as conflicts; completed tasks are excluded |
+
+### Reliability: ★★★★☆
+
+The core scheduling logic is well-covered — sorting, recurrence, and conflict detection all pass cleanly with no edge-case failures. One star is held back because `sort_by_time` sorts by `"HH:MM"` string rather than full datetime (tasks on different calendar dates at the same clock time sort identically), and `monthly` recurrence intentionally uses a 30-day approximation instead of a calendar-aware month. Neither affects the current feature set, but both are worth revisiting before the system handles multi-day or long-horizon planning.
+
+---
+
 ```mermaid
 classDiagram
     class User {
