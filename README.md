@@ -78,6 +78,7 @@ classDiagram
         +datetime end_date
         +str recurrence
         +List~Task~ tasks
+        +Pet pet
         +int pet_id
         +add_task(task: Task)
         +remove_task(task_id: int)
@@ -101,6 +102,7 @@ classDiagram
 
     User "1" --> "0..*" Pet : owns
     Pet "1" --> "0..*" Schedule : has
+    Schedule "0..*" --> "1" Pet : belongs to
     Schedule "1" --> "1..*" Task : contains
 
 ```

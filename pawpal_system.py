@@ -78,14 +78,15 @@ class Schedule:
         self,
         schedule_id: int,
         title: str,
-        pet_id: int,
+        pet: Pet,
         start_date: datetime,
         end_date: datetime,
         recurrence: str = "none",   # "none" | "daily" | "weekly" | "monthly"
     ) -> None:
         self.schedule_id = schedule_id
         self.title = title
-        self.pet_id = pet_id
+        self.pet = pet              # direct back-reference to the owning Pet
+        self.pet_id = pet.pet_id   # kept for convenience / serialization
         self.start_date = start_date
         self.end_date = end_date
         self.recurrence = recurrence

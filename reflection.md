@@ -9,13 +9,14 @@ The three core actions that a User must be able to do:
 
 **a. Initial design**
 
-- Briefly describe your initial UML design.
-- What classes did you include, and what responsibilities did you assign to each?
+- Briefly describe your initial UML design. What classes did you include, and what responsibilities did you assign to each?
+
+The UML design consists of 4 main objects. The first is the User, which is contains the methods that allow users to view their schedule and add/ remove pets. Each user can have as many pets as they want so the next class is Pet, where each pet has a given schedule of tasks. Hence, each Pet "has" a Schedule, the third class that manages the routine and tasks of a pet. Finally, a Schedule "contains" at least one Task which is the last class that strictly define the type of task needed to perform. Each class has their own respective metadata associated with them.
 
 **b. Design changes**
 
-- Did your design change during implementation?
-- If yes, describe at least one change and why you made it.
+- Did your design change during implementation? If yes, describe at least one change and why you made it.
+One change, the schedule would also have a reference to the Pet object. This would let schedule.pet.name to be easily accessible from the Schedule class.
 
 ---
 
