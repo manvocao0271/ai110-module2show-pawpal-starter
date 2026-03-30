@@ -41,3 +41,66 @@ pip install -r requirements.txt
 5. Add tests to verify key behaviors.
 6. Connect your logic to the Streamlit UI in `app.py`.
 7. Refine UML so it matches what you actually built.
+
+```mermaid
+classDiagram
+    class User {
+        +int user_id
+        +str name
+        +str email
+        +str phone
+        +List~Pet~ pets
+        +register()
+        +login()
+        +add_pet(pet: Pet)
+        +remove_pet(pet_id: int)
+        +view_schedule()
+    }
+
+    class Pet {
+        +int pet_id
+        +str name
+        +str species
+        +str breed
+        +int age
+        +float weight
+        +str medical_notes
+        +List~Schedule~ schedules
+        +add_schedule(schedule: Schedule)
+        +get_upcoming_tasks()
+        +update_profile()
+    }
+
+    class Schedule {
+        +int schedule_id
+        +str title
+        +datetime start_date
+        +datetime end_date
+        +str recurrence
+        +List~Task~ tasks
+        +int pet_id
+        +add_task(task: Task)
+        +remove_task(task_id: int)
+        +get_tasks_by_priority()
+    }
+
+    class Task {
+        +int task_id
+        +str title
+        +str category
+        +str description
+        +datetime due_datetime
+        +int priority
+        +bool is_completed
+        +str notes
+        +int schedule_id
+        +complete()
+        +prioritize()
+        +is_overdue()
+    }
+
+    User "1" --> "0..*" Pet : owns
+    Pet "1" --> "0..*" Schedule : has
+    Schedule "1" --> "1..*" Task : contains
+
+```

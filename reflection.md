@@ -2,6 +2,11 @@
 
 ## 1. System Design
 
+The three core actions that a User must be able to do:
+    - managing their pets' profiles
+    - managing the user's schedule restrictions
+    - managing the user's recommended tasks for their pets
+
 **a. Initial design**
 
 - Briefly describe your initial UML design.
